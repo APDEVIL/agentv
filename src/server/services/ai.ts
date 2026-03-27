@@ -1,11 +1,7 @@
-import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-
 import { env } from "@/env";
 
-// ── Types ─────────────────────────────────────────────────────
-
-export type LLMProvider = "anthropic" | "openai";
+// ── Types ──────────────────────────────────────────────────────
 
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
@@ -13,13 +9,13 @@ export interface ChatMessage {
 }
 
 export interface IntentResult {
-  intent: string;         // e.g. "pricing_query", "technical_support", "greeting"
-  confidence: number;     // 0–1
+  intent: string;
+  confidence: number;
   entities: EntityResult[];
 }
 
 export interface EntityResult {
-  type: string;           // e.g. "product", "date", "location", "person"
+  type: string;
   value: string;
   raw: string;
 }
@@ -27,26 +23,15 @@ export interface EntityResult {
 export interface LLMResponse {
   content: string;
   tokensUsed: number;
-  provider: LLMProvider;
 }
 
-// ── Client factory ─────────────────────────────────────────────
+// ── Client — Groq via OpenAI-compatible endpoint ───────────────
 
-function getAnthropicClient() {
-  if (!env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set");
-  return new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
-}
-
-function getOpenAIClient() {
-  if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not set");
-  return new OpenAI({ apiKey: env.OPENAI_API_KEY });
-}
-
-/** Pick provider based on env — Anthropic preferred, OpenAI fallback */
-function getProvider(): LLMProvider {
-  if (env.ANTHROPIC_API_KEY) return "anthropic";
-  if (env.OPENAI_API_KEY) return "openai";
-  throw new Error("No AI provider configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.");
+function getClient() {
+  return new OpenAI({
+    apiKey: env.OPENAI_API_KEY,
+    baseURL: env.OPENAI_BASE_URL,
+  });
 }
 
 // ── Core completion ────────────────────────────────────────────
@@ -56,56 +41,37 @@ export async function complete(
   options: {
     systemPrompt?: string;
     model?: string;
-    temperature?: number;   // 0–1
+    temperature?: number;
     maxTokens?: number;
-    provider?: LLMProvider;
   } = {}
 ): Promise<LLMResponse> {
-  const provider = options.provider ?? getProvider();
+  const client = getClient();
+  const model = options.model ?? env.GROQ_MODEL;
   const temperature = options.temperature ?? 0.7;
   const maxTokens = options.maxTokens ?? 1024;
 
-  if (provider === "anthropic") {
-    const client = getAnthropicClient();
-    const model = options.model ?? "claude-sonnet-4-20250514";
-
-    const response = await client.messages.create({
-      model,
-      max_tokens: maxTokens,
-      system: options.systemPrompt,
-      temperature,
-      messages: messages
-        .filter((m) => m.role !== "system")
-        .map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
-    });
-
-    const content =
-      response.content[0]?.type === "text" ? response.content[0].text : "";
-    return {
-      content,
-      tokensUsed: response.usage.input_tokens + response.usage.output_tokens,
-      provider: "anthropic",
-    };
-  }
-
-  // OpenAI
-  const client = getOpenAIClient();
-  const model = options.model ?? "gpt-4o";
-  const allMessages = options.systemPrompt
-    ? [{ role: "system" as const, content: options.systemPrompt }, ...messages]
-    : messages;
+  const allMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    ...(options.systemPrompt
+      ? [{ role: "system" as const, content: options.systemPrompt }]
+      : []),
+    ...messages
+      .filter((m) => m.role !== "system")
+      .map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+      })),
+  ];
 
   const response = await client.chat.completions.create({
     model,
     max_tokens: maxTokens,
     temperature,
-    messages: allMessages.map((m) => ({ role: m.role, content: m.content })),
+    messages: allMessages,
   });
 
   return {
     content: response.choices[0]?.message?.content ?? "",
     tokensUsed: response.usage?.total_tokens ?? 0,
-    provider: "openai",
   };
 }
 
@@ -117,44 +83,28 @@ export async function* streamComplete(
     systemPrompt?: string;
     model?: string;
     temperature?: number;
-    provider?: LLMProvider;
   } = {}
 ): AsyncGenerator<string> {
-  const provider = options.provider ?? getProvider();
+  const client = getClient();
+  const model = options.model ?? env.GROQ_MODEL;
 
-  if (provider === "anthropic") {
-    const client = getAnthropicClient();
-    const stream = client.messages.stream({
-      model: options.model ?? "claude-sonnet-4-20250514",
-      max_tokens: 1024,
-      system: options.systemPrompt,
-      temperature: options.temperature ?? 0.7,
-      messages: messages
-        .filter((m) => m.role !== "system")
-        .map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
-    });
-    for await (const event of stream) {
-      if (
-        event.type === "content_block_delta" &&
-        event.delta.type === "text_delta"
-      ) {
-        yield event.delta.text;
-      }
-    }
-    return;
-  }
-
-  // OpenAI streaming
-  const client = getOpenAIClient();
-  const allMessages = options.systemPrompt
-    ? [{ role: "system" as const, content: options.systemPrompt }, ...messages]
-    : messages;
+  const allMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    ...(options.systemPrompt
+      ? [{ role: "system" as const, content: options.systemPrompt }]
+      : []),
+    ...messages
+      .filter((m) => m.role !== "system")
+      .map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+      })),
+  ];
 
   const stream = await client.chat.completions.create({
-    model: options.model ?? "gpt-4o",
+    model,
     max_tokens: 1024,
     temperature: options.temperature ?? 0.7,
-    messages: allMessages.map((m) => ({ role: m.role, content: m.content })),
+    messages: allMessages,
     stream: true,
   });
 
@@ -205,7 +155,6 @@ export interface PromptContext {
   language?: string;
 }
 
-/** Assemble the full message array for an agent turn */
 export function buildPrompt(ctx: PromptContext): {
   systemPrompt: string;
   messages: ChatMessage[];
@@ -227,16 +176,15 @@ export function buildPrompt(ctx: PromptContext): {
   }
 
   const messages: ChatMessage[] = [
-    ...ctx.history.slice(-20), // keep last 20 messages for context window
+    ...ctx.history.slice(-20),
     { role: "user", content: ctx.userMessage },
   ];
 
   return { systemPrompt: system, messages };
 }
 
-// ── Token counter (rough estimate — use tiktoken for precision) ─
+// ── Token estimator ────────────────────────────────────────────
 
 export function estimateTokens(text: string): number {
-  // ~4 chars per token is a good approximation for English
   return Math.ceil(text.length / 4);
 }

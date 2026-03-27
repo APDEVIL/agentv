@@ -17,25 +17,24 @@ export const env = createEnv({
         BETTER_AUTH_GITHUB_CLIENT_ID: z.string(),
         BETTER_AUTH_GITHUB_CLIENT_SECRET: z.string(),
 
-        // AI Provider
-        OPENAI_API_KEY: z.string().optional(),
-        ANTHROPIC_API_KEY: z.string().optional(),
-        OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
+        // AI Provider — Groq via OpenAI-compatible API
+        OPENAI_API_KEY: z.string(),
+        OPENAI_BASE_URL: z.string().url().default("https://api.groq.com/openai/v1"),
+        GROQ_MODEL: z.string().default("llama-3.3-70b-versatile"),
 
-        // Voice (E2)
+        // Voice (E2 — optional)
         ELEVENLABS_API_KEY: z.string().optional(),
         WHISPER_API_KEY: z.string().optional(),
 
-        // External Tool APIs (E4)
+        // External Tool APIs (E4 — optional)
         WEATHER_API_KEY: z.string().optional(),
         SERP_API_KEY: z.string().optional(),
 
-        // Background Jobs (E5)
+        // Background Jobs (E5 — optional)
         REDIS_URL: z.string().url().optional(),
     },
 
     client: {
-        // ✅ NEXT_PUBLIC_ vars must live here
         NEXT_PUBLIC_APP_URL: z.string().url().default("http://localhost:3000"),
     },
 
@@ -51,8 +50,8 @@ export const env = createEnv({
 
         // AI
         OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-        OPENAI_EMBEDDING_MODEL: process.env.OPENAI_EMBEDDING_MODEL,
+        OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+        GROQ_MODEL: process.env.GROQ_MODEL,
 
         // Voice
         ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY,
@@ -65,7 +64,7 @@ export const env = createEnv({
         // Jobs
         REDIS_URL: process.env.REDIS_URL,
 
-        // ✅ Moved to client block, still needs runtimeEnv entry
+        // App
         NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
     },
 

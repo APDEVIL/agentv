@@ -6,7 +6,7 @@ import { complete } from "./ai";
 
 // ── FAQ search ─────────────────────────────────────────────────
 
-/** Keyword-based search — replace with pgvector semantic search when ready */
+/** Keyword-based search — replace with semantic search when ready */
 export async function searchKnowledge(
   query: string,
   options: { category?: string; limit?: number } = {}
@@ -25,39 +25,21 @@ export async function searchKnowledge(
   });
 }
 
-/**
- * Semantic search placeholder.
- * Swap searchKnowledge for this once pgvector is enabled:
- *
- * 1. Change embedding column: vector(1536) from drizzle-orm/pg-core
- * 2. Generate embedding for query via embedText()
- * 3. Use cosine_distance or l2_distance operator
- */
-export async function semanticSearch(
-  _query: string,
-  _limit = 5
-): Promise<typeof knowledgeBase.$inferSelect[]> {
-  throw new Error(
-    "Semantic search not yet enabled. Enable pgvector and implement embedText() first."
-  );
-}
-
 // ── Embedding ──────────────────────────────────────────────────
 
-/** Generate an embedding vector for a text string (OpenAI) */
-export async function embedText(text: string): Promise<number[]> {
-  const { env } = await import("@/env");
-  if (!env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY required for embeddings");
-
-  const OpenAI = (await import("openai")).default;
-  const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-
-  const result = await client.embeddings.create({
-    model: env.OPENAI_EMBEDDING_MODEL,
-    input: text,
-  });
-
-  return result.data[0]!.embedding;
+/**
+ * Embedding is not configured — Groq does not provide embeddings.
+ * To enable semantic search, add a free provider:
+ * - Hugging Face Inference API (free)
+ * - Nomic Embed (free tier)
+ * - Cohere Embed (free tier)
+ *
+ * KB search currently uses keyword matching via searchKnowledge().
+ */
+export async function embedText(_text: string): Promise<number[]> {
+  throw new Error(
+    "Embedding not configured. Using keyword search instead."
+  );
 }
 
 // ── Auto-generate KB entries from text ────────────────────────
@@ -71,7 +53,12 @@ export async function generateKBEntry(sourceText: string): Promise<{
 {"question": "...", "answer": "...", "category": "<snake_case_category>"}`;
 
   const result = await complete(
-    [{ role: "user", content: `Extract one FAQ entry from this text:\n\n${sourceText}` }],
+    [
+      {
+        role: "user",
+        content: `Extract one FAQ entry from this text:\n\n${sourceText}`,
+      },
+    ],
     { systemPrompt, maxTokens: 256, temperature: 0.2 }
   );
 
@@ -104,7 +91,10 @@ export async function createEscalation(
   return escalation;
 }
 
-export async function resolveEscalation(escalationId: string, resolvedById: string) {
+export async function resolveEscalation(
+  escalationId: string,
+  resolvedById: string
+) {
   await db
     .update(escalations)
     .set({ status: "resolved", resolvedById, updatedAt: new Date() })

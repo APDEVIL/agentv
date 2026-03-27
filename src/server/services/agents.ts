@@ -1,6 +1,5 @@
 import { db } from "@/server/db";
-import { toolCalls, conversations } from "@/server/db/schema";
-import { eq } from "drizzle-orm";
+import { toolCalls } from "@/server/db/schema";
 import { env } from "@/env";
 import { complete, buildPrompt, type ChatMessage } from "./ai";
 import { searchKnowledge } from "./knowledge";
@@ -23,7 +22,6 @@ export type ToolHandler = (input: ToolInput) => Promise<ToolResult>;
 
 const toolRegistry: Record<string, ToolHandler> = {
 
-  /** Search internal knowledge base */
   knowledge_base: async (input) => {
     const query = String(input.query ?? "");
     if (!query) return { success: false, error: "query is required" };
@@ -38,7 +36,6 @@ const toolRegistry: Record<string, ToolHandler> = {
     }
   },
 
-  /** Get weather for a location */
   weather: async (input) => {
     const location = String(input.location ?? "");
     if (!location) return { success: false, error: "location is required" };
@@ -65,7 +62,6 @@ const toolRegistry: Record<string, ToolHandler> = {
     }
   },
 
-  /** Web search via SERP API */
   web_search: async (input) => {
     const query = String(input.query ?? "");
     if (!query) return { success: false, error: "query is required" };
@@ -89,7 +85,6 @@ const toolRegistry: Record<string, ToolHandler> = {
     }
   },
 
-  /** Escalate to a human agent */
   escalate: async (input) => {
     const reason = String(input.reason ?? "User requested human agent");
     return {
@@ -103,7 +98,6 @@ const toolRegistry: Record<string, ToolHandler> = {
   },
 };
 
-/** Register a custom tool at runtime */
 export function registerTool(name: string, handler: ToolHandler): void {
   toolRegistry[name] = handler;
 }
@@ -113,12 +107,12 @@ export function registerTool(name: string, handler: ToolHandler): void {
 export interface RunAgentOptions {
   conversationId: string;
   agentSystemPrompt: string;
-  agentTools: string[];           // tool names the agent is allowed to use
+  agentTools: string[];
   history: ChatMessage[];
   userMessage: string;
   language?: string;
   model?: string;
-  temperature?: number;           // 0–100 (stored in DB), converted to 0–1 here
+  temperature?: number;
 }
 
 export interface RunAgentResult {
@@ -127,28 +121,20 @@ export interface RunAgentResult {
   toolsInvoked: string[];
 }
 
-const MAX_TOOL_ROUNDS = 5; // prevent infinite loops
+const MAX_TOOL_ROUNDS = 5;
 
-/**
- * Agentic run-loop:
- * 1. Ask LLM what to do
- * 2. If it wants to call a tool — call it, inject result, repeat
- * 3. When it produces a final answer — return it
- */
 export async function runAgent(opts: RunAgentOptions): Promise<RunAgentResult> {
   const allowedTools = opts.agentTools.filter((t) => t in toolRegistry);
   const toolsInvoked: string[] = [];
   const toolResults: string[] = [];
   let totalTokens = 0;
 
-  // Build tool instructions for the system prompt
   const toolInstructions =
     allowedTools.length > 0
       ? `\n\nYou have access to these tools. To use one, respond ONLY with JSON:\n` +
         `{"tool": "<tool_name>", "input": {<input_object>}}\n\n` +
-        `Available tools:\n${allowedTools
-          .map((t) => `- ${t}`)
-          .join("\n")}\n\nIf you don't need a tool, respond normally in plain text.`
+        `Available tools:\n${allowedTools.map((t) => `- ${t}`).join("\n")}\n\n` +
+        `If you don't need a tool, respond normally in plain text.`
       : "";
 
   const { systemPrompt, messages } = buildPrompt({
@@ -165,16 +151,14 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunAgentResult> {
     const result = await complete(currentMessages, {
       systemPrompt,
       temperature: (opts.temperature ?? 70) / 100,
-      model: opts.model,
+      model: opts.model ?? env.GROQ_MODEL,   // ← Groq model default
     });
 
     totalTokens += result.tokensUsed;
 
-    // Check if LLM wants to call a tool
     const toolCall = tryParseToolCall(result.content);
 
     if (!toolCall || !allowedTools.includes(toolCall.tool)) {
-      // Final answer — log the tool calls and return
       await logToolCalls(opts.conversationId, toolsInvoked, toolResults);
       return {
         response: result.content,
@@ -183,7 +167,6 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunAgentResult> {
       };
     }
 
-    // Execute the tool
     const handler = toolRegistry[toolCall.tool]!;
     const toolResult = await handler(toolCall.input);
     toolsInvoked.push(toolCall.tool);
@@ -191,15 +174,16 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunAgentResult> {
     const resultSummary = `Tool "${toolCall.tool}" result: ${JSON.stringify(toolResult.data ?? toolResult.error)}`;
     toolResults.push(resultSummary);
 
-    // Inject result as assistant + user message pair for next round
     currentMessages = [
       ...currentMessages,
       { role: "assistant", content: result.content },
-      { role: "user", content: `Tool result: ${JSON.stringify(toolResult)}. Now answer the user's original question using this information.` },
+      {
+        role: "user",
+        content: `Tool result: ${JSON.stringify(toolResult)}. Now answer the user's original question using this information.`,
+      },
     ];
   }
 
-  // Hit max rounds — return a fallback
   return {
     response: "I wasn't able to complete this request. Please try again or contact support.",
     tokensUsed: totalTokens,
